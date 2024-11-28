@@ -7,13 +7,19 @@
 #include "Arduino.h"
 #include "VFDRS485.h"
 
-VFDRS485::VFDRS485(char[15] *vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15, HardwareSerial *_console = NULL){
+VFDRS485::VFDRS485(){
+
+}
+VFDRS485::VFDRS485(const char* vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15, int debug = 0){
 
     /**
      * @brief AFFECTATION INITIALE VARIABLE PUBLIQUE
      * 
      */
-        Nom = vfd_name;
+         //Allocate enough memory for copying the input string.
+        Nom = (char*) malloc( strlen(vfd_name) * sizeof(char) + 1 );
+        //Copy the input string to the class's field.
+        strcpy( Nom, vfd_name );
         RS485_ID = vfd_adr ; //ID Adresse du VFD à controler
         Ctr485 = ctr485 ; //A1 ;
         // assign the Arduino pin that must be connected to RE-DE RS485 transceiver
@@ -21,12 +27,12 @@ VFDRS485::VFDRS485(char[15] *vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15
         RXPIN = rx_pin ;
         VFD_TIMEOUT=3000 ; // 3sec de timeout si le Vfd ne reponds pas
         TEMP_MAX_REV = 20000 ; //20 secondes avant Revers
-        console = _console ; //Console de déboguage
+        ACTIVE_CONSOLE  = debug;
+
+        //console = _console ; //Console de déboguage
         IsRunning = 0 ;
         LAST_ERROR_CODE = 0 ;
 
-        byteStop[] = {0x01, 0x06, 0x20, 0x00, 0x00, 0x05, 0x42, 0x09}; // not the right values
-        byteFreqGet[] = {0x01, 0x06, 0x10, 0x01, 0x00, 0x02, 0x43, 0xCA}; // Lecture de la frequence actuelle
         pinMode(RXPIN, INPUT);
         pinMode(TXEN, OUTPUT);
 
@@ -66,8 +72,6 @@ VFDRS485::VFDRS485(char[15] *vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15
         freqDem=10000 ;
         tmp_freq=0;
 
-        numChars = 32;
-        Reponse[numChars]={} ;
         ReponseEnCour=0;
 
         analog_encour = 0;
@@ -85,8 +89,11 @@ VFDRS485::VFDRS485(char[15] *vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15
 
         msg_t message ;
         
-        byteReceive[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-        hexCharArray[] PROGMEM = "0123456789ABCDEF";
+        //byteReceive[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        for (int p=0;p<7;p++){
+            byteReceive[p] = 0xFF;
+        }
+        
     // --------------------------------------------------------------------------------------------------------
 
     vfd.ID=RS485_ID;
@@ -99,17 +106,37 @@ VFDRS485::VFDRS485(char[15] *vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15
     vfd.EN_QUESTION=0 ;
 
     runDejaSend=0;
-
-    WriteToSerial("VFD "+Nom+": OK");
+    WriteToSerial("VFD ",0);
+    WriteToSerial(Nom, 0);
+    WriteToSerial( ": OK",1);
 }
 
+VFDRS485::~VFDRS485(void){
+    free(Nom);
+}
+
+int VFDRS485::SendMsgInRS485(uint8_t cmd_rw, msg_t &msg){
+    byte byteCheck[] = {msg.DEST_ID, cmd_rw, msg.FUNC_ACT_H, msg.FUNC_ACT_L, msg.REG_ADR_H, msg.REG_ADR_L};
+    unsigned mycrc = crc_chk_value(byteCheck,sizeof(byteCheck)) ; 
+    uint8_t MSB=highByte(mycrc);
+    uint8_t LSB=lowByte(mycrc);
+     
+    byte byteToSend[] = {msg.DEST_ID, cmd_rw, msg.FUNC_ACT_H, msg.FUNC_ACT_L, msg.REG_ADR_H, msg.REG_ADR_L, LSB, MSB}; // Correcte
+      
+    digitalWrite(Ctr485, RS485Transmit);  //On met l'etat en Haut pour transmettre
+    byteSend=Serial2.write(byteToSend, sizeof(byteToSend));
+    Serial2.flush();
+    delay(4); //On attends pour3.5 caractère avant le prochain envoie
+    digitalWrite(Ctr485, RS485Receive);  
+    return 1;
+}
 
 int VFDRS485::WriteToVFD(msg_t &msg, uint8_t CmdPH, uint8_t CmdPL, uint8_t ValPH, uint8_t ValPL){
     byte byteCheck[] = {vfd.ID, 0x06, CmdPH, CmdPL, ValPH, ValPL};
     unsigned mycrc = crc_chk_value(byteCheck,sizeof(byteCheck)) ; 
     uint8_t MSB=highByte(mycrc);
     uint8_t LSB=lowByte(mycrc);
-    msg.DEST_ID=DeviceID ;
+    msg.DEST_ID=vfd.ID ;
     msg.OP_CODE=0x06 ;
     msg.FUNC_ACT_H = CmdPH;
     msg.FUNC_ACT_L = CmdPL;
@@ -118,7 +145,7 @@ int VFDRS485::WriteToVFD(msg_t &msg, uint8_t CmdPH, uint8_t CmdPL, uint8_t ValPH
     msg.CRC_ENVOIE = mycrc ;
     msg.CRC_RECUS = 0x0000 ;
     msg.REPONSE = 0xFFFF ;  
-    byte byteToSend[] = {DeviceID, 0x06, CmdPH, CmdPL, ValPH, ValPL, LSB, MSB}; // Correcte
+    byte byteToSend[] = {vfd.ID, 0x06, CmdPH, CmdPL, ValPH, ValPL, LSB, MSB}; // Correcte
     vfd.LAST_FUNC_H =msg.FUNC_ACT_H;
     vfd.LAST_FUNC_L=msg.FUNC_ACT_L;
     vfd.LAST_REP_H=0xFF;
@@ -140,7 +167,7 @@ int VFDRS485::ReadFromVFD(msg_t &msg, uint8_t CmdPH, uint8_t CmdPL, uint8_t ValP
     unsigned mycrc = crc_chk_value(byteCheck,sizeof(byteCheck)) ; 
     uint8_t MSB=highByte(mycrc);
     uint8_t LSB=lowByte(mycrc);
-    msg.DEST_ID=DeviceID ;
+    msg.DEST_ID=vfd.ID ;
     msg.OP_CODE=0x06 ;
     msg.FUNC_ACT_H = CmdPH;
     msg.FUNC_ACT_L = CmdPL;
@@ -204,8 +231,10 @@ void VFDRS485::CheckReponseVFD(){
         last_reponse.CRC_ENVOIE = byteReceive[7] ;
         last_reponse.CRC_RECUS = byteReceive[8] ;
 
-        char[] msgText = "<=VFD_REPONSE "+last_reponse.DEST_ID+": "+last_reponse.REPONSE ;
-        WriteToSerial(msgText);
+        WriteToSerial("<=VFD_REPONSE ");
+        WriteToSerial(last_reponse.DEST_ID);
+        WriteToSerial(": ");
+        WriteToSerial(last_reponse.REPONSE);
 
         if (last_reponse.DEST_ID == vfd.ID){
             //Le VFD à repondu a une demande d'ecriture
@@ -217,8 +246,9 @@ void VFDRS485::CheckReponseVFD(){
                 vfd.LAST_REP_L=last_reponse.REG_ADR_L;
                 vfd.TEMP_START= 0;
                 vfd.EN_QUESTION = 0;
-                char[] text = "VFD "+vfd.Nom+" PRESENT.";
-                WriteToSerial(text);
+                WriteToSerial("VFD ",0);
+                WriteToSerial(Nom,0);
+                WriteToSerial(" PRESENT",1);
             }
             if(last_reponse.FUNC_ACT_H == CMD_OUTPUT_FREQ_H && last_reponse.FUNC_ACT_L == CMD_OUTPUT_FREQ_L){
                 //Reponse de la demande de fréquence
@@ -241,8 +271,10 @@ void VFDRS485::CheckReponseVFD(){
             if(last_reponse.FUNC_ACT_H == CMD_ERROR_H && last_reponse.FUNC_ACT_L == CMD_ERROR_L){
                 LAST_ERROR_CODE = strtol(last_reponse.REPONSE, NULL, 16);
                 if(LAST_ERROR_CODE>0){
-                    char[] text = "VFD "+vfd.Nom+" ERROR: "+LAST_ERROR_CODE;
-                    WriteToSerial(text);
+                    WriteToSerial("VFD ",0);
+                    WriteToSerial(Nom,0);
+                    WriteToSerial(" ERROR: ",0);
+                    WriteToSerial(LAST_ERROR_CODE,1);
                 }
             }
 
@@ -276,27 +308,35 @@ void VFDRS485::CheckNoReponseVFD(){
             if(vfd.PRESENT > 0){
                 //Déconnecté
                 if(onDisconnect != NULL){
-                    onDisconnect(vfd.Nom, vfd.ID);
+                    onDisconnect(Nom, vfd.ID);
                 }
             }
             vfd.PRESENT = 0;
             vfd.EN_QUESTION = 0;
             if(onTimeOut != NULL){
-                onTimeOut(vfd.Nom,vfd.ID);
+                onTimeOut(Nom,vfd.ID);
             }
         }
     }
 }
 
-void VFDRS485::WriteToSerial(*char[] msg){
-    if(console == NULL){
-        return ;
-    }
-    console.println(msg) ;
+void VFDRS485::WriteToSerial(const char* msg, int IsLast = 1){
+    if(ACTIVE_CONSOLE ){
+        if(IsLast){
+            Serial.println(msg) ;
+        }else{
+            Serial.print(msg) ;
+        }
+        
+    }    
 }
 
 void VFDRS485::StopVFD(){
-    WriteToVFD(message, vfd.ID, 0x20, 0x00, 0x00, 0x05);
+    uint8_t CmdH = 0x20 ;
+    uint8_t CmdL = 0x00 ;
+    uint8_t ValH = 0x00 ;
+    uint8_t ValL = 0x05 ;
+    VFDRS485::WriteToVFD(message, CmdH, CmdL, ValH, ValL);
     runDejaSend=0;
     ETAT_MOTEUR = MOTEUR_OFF ;
     delay(500);
@@ -304,7 +344,7 @@ void VFDRS485::StopVFD(){
 }
 
 void VFDRS485::StartVFD(){
-    WriteToVFD(message, vfd.ID, 0x20, 0x00, 0x00, 0x01);
+    WriteToVFD(message, 0x20, 0x00, 0x00, 0x01);
     runDejaSend=1;    
     ETAT_MOTEUR = MOTEUR_ON ;
     temp_func = millis();
@@ -313,7 +353,7 @@ void VFDRS485::StartVFD(){
 }
 
 void VFDRS485::ReverseVFD(){
-    WriteToVFD(message, vfd.ID, 0x20, 0x00, 0x00, 0x02);
+    WriteToVFD(message, 0x20, 0x00, 0x00, 0x02);
     runDejaSend=1;    
     ETAT_MOTEUR = MOTEUR_ON ;
     temp_func = millis();
@@ -322,27 +362,27 @@ void VFDRS485::ReverseVFD(){
 }
 
 void VFDRS485::GetFreqVFD(){
-    ReadFromVFD(message, vfd.ID, CMD_OUTPUT_FREQ_H, CMD_OUTPUT_FREQ_L, 0x00, 0x02);
+    ReadFromVFD(message, CMD_OUTPUT_FREQ_H, CMD_OUTPUT_FREQ_L, 0x00, 0x02);
     CheckReponseVFD();
 }
 
 void VFDRS485::GetCurrentVFD(){
-    ReadFromVFD(message, vfd.ID, CMD_OUTPUT_CURRENT_H, CMD_OUTPUT_CURRENT_L, 0x00, 0x02);
+    ReadFromVFD(message, CMD_OUTPUT_CURRENT_H, CMD_OUTPUT_CURRENT_L, 0x00, 0x02);
     CheckReponseVFD();
 }
 
 void VFDRS485::GetMotorPowerVFD(){
-    ReadFromVFD(message, vfd.ID, CMD_OUTPUT_POWER_H, CMD_OUTPUT_POWER_L, 0x00, 0x02);
+    ReadFromVFD(message, CMD_OUTPUT_POWER_H, CMD_OUTPUT_POWER_L, 0x00, 0x02);
     CheckReponseVFD();
 }
 
 void VFDRS485::GetMotorTempVFD(){
-    ReadFromVFD(message, vfd.ID, CMD_OUTPUT_MOTOR_TEMP_H, CMD_OUTPUT_MOTOR_TEMP_L, 0x00, 0x02);
+    ReadFromVFD(message, CMD_OUTPUT_MOTOR_TEMP_H, CMD_OUTPUT_MOTOR_TEMP_L, 0x00, 0x02);
     CheckReponseVFD();
 }
 
 void VFDRS485::GetErrorVFD(){
-    ReadFromVFD(message, vfd.ID, CMD_ERROR_H, CMD_ERROR_L, 0x00, 0x02);
+    ReadFromVFD(message, CMD_ERROR_H, CMD_ERROR_L, 0x00, 0x02);
     CheckReponseVFD();
 }
 

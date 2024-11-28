@@ -8,13 +8,18 @@
 #include <VFDRS485.h>
 
 #define RXPIN 15
-
+const int Ctr485=A1;
 PLCA6TRANS MyPLC;
-VFDRS485 vfd("Moteur_A", 1, MyPLC.Ctr485, RXPIN, Serial) ;
+VFDRS485 vfd("Moteur_A", 1, Ctr485, RXPIN, 1) ;
+
+VFDRS485::msg_t MessageRecus ;
 
 void setup(){
   Serial.begin(9600);
   Serial.println("VFD on RS485 Test") ;
+
+  vfd.setEventOnReceive(onReceive);
+
   MyPLC.ErrorOFF();
   MyPLC.RunON();
   delay(1000);
@@ -54,4 +59,8 @@ void loop(){
             vfd.LAST_ERROR_CODE=0;
         }
     }
+}
+
+void onReceive(VFDRS485::msg_t msg){
+    Serial.println("Message recus dans Console");
 }

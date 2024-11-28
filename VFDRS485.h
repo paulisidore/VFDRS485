@@ -14,19 +14,44 @@
 class VFDRS485 {
     
     public:
-        VFDRS485(char[15] *vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15, HardwareSerial *_console = NULL);
+        VFDRS485();
+        VFDRS485(const char* vfd_name, int vfd_adr, int ctr485=A1, int rx_pin=15, int debug = 0);
+        ~VFDRS485(void) ;
 
-        char Nom[15] ;
+        char* Nom ;
         int RS485_ID ;
         int Ctr485 ; //A1;
         // assign the Arduino pin that must be connected to RE-DE RS485 transceiver
         int TXEN ; 
         int RXPIN ;
-        byte byteStop[];
-        byte byteFreqGet[];
+
         int TEMP_MAX_REV ;
         int VFD_TIMEOUT ; //Send command timeout
-        HardwareSerial console ; //Console de déboguage
+        int ACTIVE_CONSOLE ;
+        typedef struct {
+            uint8_t DEST_ID;          /*!< Slave address between 1 and 247. 0 means broadcast */
+            uint8_t OP_CODE;          /*!< Function code: 1, 2, 3, 4, 5, 6, 15 or 16 */
+            uint8_t FUNC_ACT_H;         /*!< Commde Poid Fort */
+            uint8_t FUNC_ACT_L;         /*!< Commde Poid Faible */
+            uint16_t REG_ADR_H;    /*!< Address of the first register to access at slave/s */
+            uint16_t REG_ADR_L;    /*!< Address of the first register to access at slave/s */
+            uint16_t REPONSE;
+            uint16_t CRC_ENVOIE;
+            uint16_t CRC_RECUS;  
+        }
+        msg_t;
+
+        typedef struct {
+        uint8_t ID;          /*!< Slave address between 1 and 247. 0 means broadcast */
+        uint8_t PRESENT ;   //SI le vfd est prsent il a deja repondu a au moin un appel
+        uint8_t LAST_FUNC_H;         /*!< Commde Poid Fort */
+        uint8_t LAST_FUNC_L;         /*!< Commde Poid Faible */
+        uint16_t LAST_REP_H;    /*!< Address of the first register to access at slave/s */
+        uint16_t LAST_REP_L;    /*!< Address of the first register to access at slave/s */ 
+        int TEMP_START ;  //Stock le temps de depart de la commande
+        int EN_QUESTION ;
+        }
+        vfd_t;
 
         /**
          * @brief VFD ModBus Command H for receive Ouput Frequency in Hz (Hertz)
@@ -106,6 +131,15 @@ class VFDRS485 {
          * @brief Return last VFD Error Code
          */
         int LAST_ERROR_CODE ;
+
+        /**
+         * @brief SSend a message to RS485 bus
+         * 
+         * @param cmd_rw 
+         * @param msg 
+         * @return int 
+         */
+        int VFDRS485::SendMsgInRS485(uint8_t cmd_rw, msg_t &msg);
 
         /**
          * @brief Send Message to VFD
@@ -193,8 +227,8 @@ class VFDRS485 {
 
         //Events CallBack
         using onReceiveEvent = void (*)(msg_t msg); //type aliasing
-        using onTimeOutEvent = void (*)(char[] vfd_nom, int vfd_adr);
-        using onDisConnectEvent = void (*)(char[] vfd_nom, int vfd_adr);
+        using onTimeOutEvent = void (*)(const char* vfd_nom, int vfd_adr);
+        using onDisConnectEvent = void (*)(const char* vfd_nom, int vfd_adr);
         
         /**
          * @brief set on receive data callback function
@@ -221,11 +255,11 @@ class VFDRS485 {
         int RS485Transmit ;
         int RS485Receive;
 
-        const int MOTEUR_ON;
-        const int MOTEUR_OFF;
+        int MOTEUR_ON;
+        int MOTEUR_OFF;
 
-        const int ANALOG_ASC;
-        const int ANALOG_DESC;
+        int ANALOG_ASC;
+        int ANALOG_DESC;
 
         byte byteSend;
         int runDejaSend;
@@ -236,9 +270,7 @@ class VFDRS485 {
 
         int freqDem ;
         int tmp_freq ;
-
-        const byte numChars ;
-        char Reponse[] ;
+        
         int ReponseEnCour;
 
         int analog_encour;
@@ -254,35 +286,9 @@ class VFDRS485 {
         int SENS_ROTATION_AR ;
         int SENS_ACT ;
 
-        typedef struct {
-            uint8_t DEST_ID;          /*!< Slave address between 1 and 247. 0 means broadcast */
-            uint8_t OP_CODE;          /*!< Function code: 1, 2, 3, 4, 5, 6, 15 or 16 */
-            uint8_t FUNC_ACT_H;         /*!< Commde Poid Fort */
-            uint8_t FUNC_ACT_L;         /*!< Commde Poid Faible */
-            uint16_t REG_ADR_H;    /*!< Address of the first register to access at slave/s */
-            uint16_t REG_ADR_L;    /*!< Address of the first register to access at slave/s */
-            uint16_t REPONSE;
-            uint16_t CRC_ENVOIE;
-            uint16_t CRC_RECUS;  
-        }
-        msg_t;
-
-        typedef struct {
-        uint8_t ID;          /*!< Slave address between 1 and 247. 0 means broadcast */
-        uint8_t PRESENT ;   //SI le vfd est prsent il a deja repondu a au moin un appel
-        uint8_t LAST_FUNC_H;         /*!< Commde Poid Fort */
-        uint8_t LAST_FUNC_L;         /*!< Commde Poid Faible */
-        uint16_t LAST_REP_H;    /*!< Address of the first register to access at slave/s */
-        uint16_t LAST_REP_L;    /*!< Address of the first register to access at slave/s */ 
-        int TEMP_START ;  //Stock le temps de depart de la commande
-        int EN_QUESTION ;
-        }
-        vfd_t;
-
         msg_t message ;
         
-        byte byteReceive[] ;
-        const char hexCharArray[];
+        byte byteReceive[7] ;
 
         vfd_t vfd ;
 
@@ -311,7 +317,15 @@ class VFDRS485 {
          */
         void VFDRS485::CheckNoReponseVFD() ;
 
+        /**
+         * @brief Write Debug Message on Serial 1
+         * 
+         * @param msg 
+         * @param IsLast : 1 = Use Serial.println ; 0 = Use Serial.print
+         */
+        void VFDRS485::WriteToSerial(const char* msg, int IsLast = 1);
+
     // --------------------------------------------------------------------------------------------------------
 
-}
+};
 #endif
